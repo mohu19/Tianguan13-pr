@@ -11,6 +11,8 @@
 #define LANHONGQIU_ICON 'modular_tianguan/modules/lanhongqiu_pet/icons/pets.dmi'
 #define LANHONGQIU_HELD_LH 'modular_tianguan/modules/lanhongqiu_pet/icons/pets_held_lh.dmi'
 #define LANHONGQIU_HELD_RH 'modular_tianguan/modules/lanhongqiu_pet/icons/pets_held_rh.dmi'
+/// 戴在头上时用的图集（state 名与宠物 icon_state 同名，4 方向）
+#define LANHONGQIU_HEAD_ICON 'modular_tianguan/modules/lanhongqiu_pet/icons/pets_head.dmi'
 
 /// 可以领「蓝红球召唤信标」的玩家（New() 里会统一 ckey() 归一化，大小写无所谓）
 #define LANHONGQIU_OWNER_CKEYS list("lanhongqiu", "Lv19874900")
@@ -35,6 +37,9 @@
 	icon = LANHONGQIU_ICON
 	held_lh = LANHONGQIU_HELD_LH
 	held_rh = LANHONGQIU_HELD_RH
+	head_icon = LANHONGQIU_HEAD_ICON
+	/// 抱进宠物箱后可以戴在头上（/obj/item/mob_holder 的既有机制）
+	worn_slot_flags = ITEM_SLOT_HEAD
 	icon_state = "lanhongqiu"
 	icon_living = "lanhongqiu"
 	icon_dead = "lanhongqiu_dead"
@@ -70,94 +75,78 @@
 	charge = new charge_type(src)
 	charge.Grant(src)
 
-/mob/living/basic/pet/lanhongqiu/Destroy()
-	QDEL_NULL(charge)
-	clear_weapon(drop_to_loc = FALSE)
-	return ..()
-
-/mob/living/basic/pet/lanhongqiu/Exited(atom/movable/gone, direction)
-	. = ..()
-	if(gone == weapon)
-		clear_weapon(drop_to_loc = FALSE)
-
 /datum/action/cooldown/mob_cooldown/charge/basic_charge/dodgeroll
-	name = "翻滚闪避"
-	desc = "向指定方向快速翻滚并短暂闪避弹道。"
 	cooldown_time = 5 SECONDS
 	charge_delay = 0.1 SECONDS
 	charge_past = 0
 	charge_distance = 2
 	charge_damage = 0
 	destroy_objects = FALSE
-	recoil_duration = -1
-	knockdown_duration = -1
 
-/datum/action/cooldown/mob_cooldown/charge/basic_charge/dodgeroll/do_charge_indicator(atom/charger, atom/charge_target)
+/datum/action/cooldown/mob_cooldown/charge/basic_charge/dodgeroll/do_charge(atom/movable/charger, atom/target_atom, delay, past)
+	. = ..()
 	if(!isliving(charger))
 		return
 	ADD_TRAIT(charger, TRAIT_UNHITTABLE_BY_PROJECTILES, REF(src))
 	charger.SpinAnimation(FLIP_EMOTE_DURATION, 1)
-	addtimer(TRAIT_CALLBACK_REMOVE(charger, TRAIT_UNHITTABLE_BY_PROJECTILES, REF(src)), TAUNT_EMOTE_DURATION)
-
-/datum/action/cooldown/mob_cooldown/charge/basic_charge/dodgeroll/can_hit_target(atom/movable/source, atom/target)
-	return FALSE
-
-/datum/action/cooldown/mob_cooldown/charge/basic_charge/dodgeroll/on_moved(atom/source)
-	SIGNAL_HANDLER
-	return
+	addtimer(TRAIT_CALLBACK_REMOVE(charger, TRAIT_UNHITTABLE_BY_PROJECTILES, REF(src)), TAUNT_EMOTE_DURATION * 1)
 
 /mob/living/basic/pet/lanhongqiu/UnarmedAttack(atom/A, proximity_flag, list/modifiers)
 	. = ..()
-	if(!. || !proximity_flag)
-		return
 	if(!isitem(A))
 		return
 
 	if(!weapon && istype(A, /obj/item/skysword))
-		var/obj/item/skysword/sword = A
-		if(!isturf(sword.loc) || sword.anchored || QDELETED(sword))
-			return
-		sword.forceMove(src)
-		if(sword.loc != src)
-			return
-		weapon = sword
-		RegisterSignal(weapon, COMSIG_QDELETING, PROC_REF(on_weapon_qdel))
-		visible_message(span_notice("[src] 拿起了 [sword]。"), span_notice("你拿起了 [sword]。"))
+		visible_message(span_notice("[src] 拿起了 [A]."), span_notice("你拿起了 [A]."))
+		weapon = A
+		weapon.forceMove(src)
 		melee_damage_lower = 18
 		melee_damage_upper = 22
 		armour_penetration = 0
 		wound_bonus = CANT_WOUND
 		update_icons()
-	else if(!weapon)
+	else if(!weapon && !istype(A, /obj/item/spear))
 		to_chat(src, span_warning("你不会使用[A]！"))
 
-/mob/living/basic/pet/lanhongqiu/proc/clear_weapon(drop_to_loc = FALSE)
-	if(!weapon)
-		return
-	var/obj/item/skysword/old_weapon = weapon
-	weapon = null
-	UnregisterSignal(old_weapon, COMSIG_QDELETING)
-	if(drop_to_loc && !QDELETED(old_weapon) && old_weapon.loc == src)
-		old_weapon.forceMove(drop_location())
-	melee_damage_lower = initial(melee_damage_lower)
-	melee_damage_upper = initial(melee_damage_upper)
-	armour_penetration = initial(armour_penetration)
-	wound_bonus = initial(wound_bonus)
-	update_icons()
-
-/mob/living/basic/pet/lanhongqiu/proc/on_weapon_qdel(datum/source)
-	SIGNAL_HANDLER
-	clear_weapon(drop_to_loc = FALSE)
-
-/mob/living/basic/pet/lanhongqiu/update_icons()
+/// 三种形态：死亡（基类） / 趴下休息 / 持天武剑 / 平常
+/mob/living/basic/pet/lanhongqiu/update_icon_state()
 	. = ..()
 	if(stat == DEAD)
 		return
-	icon_state = weapon ? initial(icon_state) + "_sword" : initial(icon_state)
+	if(resting)
+		icon_state = "[icon_living]_rest"
+		return
+	icon_state = weapon ? "[initial(icon_state)]_sword" : initial(icon_state)
+
+/mob/living/basic/pet/lanhongqiu/update_icons()
+	. = ..()
+	update_icon_state()
+
+/mob/living/basic/pet/lanhongqiu/update_resting()
+	. = ..()
+	if(stat != DEAD)
+		update_appearance(UPDATE_ICON_STATE)
+
+/// 像其他宠物（poppy / bumbles）一样自己找时机趴下、再自己起来
+/mob/living/basic/pet/lanhongqiu/Life(seconds_per_tick = SSMOBS_DT, times_fired)
+	. = ..()
+	if(client || stat)
+		return
+	if(!SPT_PROB(0.5, seconds_per_tick))
+		return
+	if(!resting)
+		manual_emote(pick("缩成一团趴了下来。", "伸了个懒腰，趴下休息。", "滚了滚，趴在地上。"))
+		set_resting(TRUE)
+	else
+		manual_emote(pick("晃了晃身体站了起来。", "抖抖身子爬起来。", "抬起头，重新站好。"))
+		set_resting(FALSE)
 
 /mob/living/basic/pet/lanhongqiu/death(gibbed)
-	clear_weapon(drop_to_loc = TRUE)
-	return ..()
+	if(weapon)
+		weapon.forceMove(get_turf(src))
+		weapon = null
+	update_icons()
+	. = ..()
 
 /obj/item/skysword
 	name = "天武剑"
